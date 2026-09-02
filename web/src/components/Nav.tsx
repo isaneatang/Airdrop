@@ -27,8 +27,12 @@ export function Nav({ route }: { route: Route }) {
     <>
       {/* Desktop */}
       <nav className="hidden border-b border-ink-700 bg-ink-900/95 sm:block" style={{ zIndex: "var(--z-nav)" }}>
-        <div className="mx-auto flex max-w-3xl items-center gap-1 px-6 py-3">
-          <span className="mr-4 text-sm font-semibold text-ink-100">Vested Distribution</span>
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-8 py-4 lg:px-10">
+          <a href="#/streams" className="flex items-center gap-3 text-sm font-semibold text-ink-100">
+            <span className="brand-mark"><span /></span>
+            <span>Vested<span className="text-moss-400">.</span></span>
+          </a>
+          <div className="flex items-center gap-1">
           {ITEMS.map((item) => (
             <a
               key={item.key}
@@ -40,6 +44,7 @@ export function Nav({ route }: { route: Route }) {
               {item.label}
             </a>
           ))}
+          </div>
         </div>
       </nav>
 
@@ -48,6 +53,7 @@ export function Nav({ route }: { route: Route }) {
         className="safe-bottom fixed inset-x-0 bottom-0 border-t border-ink-700 bg-ink-900/98 backdrop-blur-none sm:hidden"
         style={{ zIndex: "var(--z-nav)" }}
       >
+        <div className="mobile-brand"><span className="brand-mark"><span /></span><span>Vested<span className="text-moss-400">.</span></span></div>
         <ul className="flex">
           {ITEMS.map((item) => (
             <li key={item.key} className="flex-1">

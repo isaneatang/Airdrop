@@ -55,6 +55,8 @@
   :focus-visible {
     @apply outline-none ring-2 ring-moss-500/70 ring-offset-2 ring-offset-ink-900;
   }
+
+  ::selection { background: #4e6d59; color: #eef2ef; }
 }
 
 @layer utilities {
@@ -67,4 +69,52 @@
   .min-h-app {
     min-height: var(--app-height);
   }
+
+  .eyebrow {
+    @apply text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-400;
+  }
+
+  .brand-mark {
+    @apply relative flex h-7 w-7 items-center justify-center rounded-lg border border-moss-500/60 bg-moss-700/30;
+  }
+  .brand-mark::before, .brand-mark::after, .brand-mark span {
+    content: "";
+    @apply absolute h-3 w-1 rounded-full bg-moss-300;
+  }
+  .brand-mark::before { transform: translateX(-4px) rotate(30deg); }
+  .brand-mark::after { transform: translateX(4px) rotate(-30deg); }
+  .brand-mark span { height: 10px; width: 2px; background: #eef2ef; }
+
+  .mobile-brand {
+    @apply flex items-center gap-2 border-b border-ink-700 px-5 py-3 text-xs font-semibold text-ink-100;
+  }
+
+  .dashboard-hero {
+    @apply relative min-h-[370px] overflow-hidden rounded-[1.75rem] border border-moss-700/50 bg-[#202c27] p-7 shadow-[0_24px_80px_rgba(10,15,13,0.28)] sm:p-10;
+  }
+  .dashboard-hero::after {
+    content: "";
+    @apply absolute inset-y-0 right-0 w-1/2 opacity-50;
+    border-left: 1px solid rgba(138,169,147,0.12);
+    background-image: repeating-linear-gradient(135deg, transparent 0 18px, rgba(138,169,147,0.08) 19px 20px);
+    clip-path: polygon(35% 0, 100% 0, 100% 100%, 0 100%);
+  }
+  .hero-action {
+    @apply inline-flex items-center gap-2 rounded-xl bg-moss-500 px-4 py-3 text-sm font-semibold text-ink-950 transition-transform hover:-translate-y-0.5 hover:bg-moss-400;
+  }
+  .hero-link { @apply inline-flex items-center gap-2 rounded-xl border border-ink-500/70 px-4 py-3 text-sm font-medium text-ink-100 hover:border-ink-300; }
+  .hero-signal { @apply absolute -right-12 bottom-[-5rem] h-[25rem] w-[25rem] sm:right-10 sm:bottom-[-6rem]; }
+  .signal-ring { @apply absolute rounded-full border border-moss-300/20; }
+  .signal-ring-one { @apply inset-0; }
+  .signal-ring-two { @apply inset-12 border-moss-300/30; }
+  .signal-core { @apply absolute left-1/2 top-1/2 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl border border-moss-300/50 bg-moss-600 text-ink-50 shadow-[0_0_60px_rgba(111,145,121,0.35)]; }
+  .signal-line { @apply absolute h-px origin-left bg-moss-300/40; width: 46%; left: 50%; top: 50%; }
+  .signal-line-one { transform: rotate(28deg); } .signal-line-two { transform: rotate(-52deg); }
+
+  .metric-grid { @apply grid gap-3 sm:grid-cols-3; }
+  .metric-card { @apply rounded-2xl border border-ink-700 bg-ink-850 px-5 py-4; }
+  .metric-highlight { @apply border-moss-700/60 bg-[#202b26]; }
+  .metric-label { @apply block text-xs text-ink-400; }
+  .metric-card strong { @apply mt-3 block truncate text-2xl font-semibold tracking-tight text-ink-50; }
+  .metric-foot { @apply mt-1 block text-[11px] text-ink-500; }
 }

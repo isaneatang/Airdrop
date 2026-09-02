@@ -23,9 +23,16 @@ export default function App() {
     <div className="min-h-app bg-ink-900">
       <Nav route={route} />
 
-      <main className="mx-auto max-w-3xl px-4 pb-28 pt-5 sm:px-6 sm:pb-12">
-        <header className="mb-5 flex items-center justify-between gap-3">
-          <h1 className="text-lg font-semibold text-ink-50">{TITLES[route.name]}</h1>
+      <main className="mx-auto max-w-5xl px-4 pb-28 pt-5 sm:px-8 sm:pb-12 lg:px-10">
+        <header className="mb-8 flex items-center justify-between gap-3">
+          <div className="sm:hidden">
+            <p className="eyebrow">BOT Chain</p>
+            <h1 className="mt-1 text-lg font-semibold tracking-tight text-ink-50">{TITLES[route.name]}</h1>
+          </div>
+          <div className="hidden sm:block">
+            <p className="eyebrow">Distribution protocol</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-ink-50">{TITLES[route.name]}</h1>
+          </div>
           <ConnectButton />
         </header>
 

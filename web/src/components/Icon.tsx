@@ -5,7 +5,7 @@
  */
 type Name =
   | "streams" | "create" | "airdrop" | "account" | "check" | "close"
-  | "chevron" | "external" | "wallet" | "warning" | "clock" | "lock";
+  | "chevron" | "external" | "wallet" | "warning" | "clock" | "lock" | "arrow";
 
 const paths: Record<Name, React.ReactNode> = {
   streams: <><path d="M3 8h7a4 4 0 0 1 4 4v0a4 4 0 0 0 4 4h4" /><path d="M17 5l4 3-4 3" /></>,
@@ -20,6 +20,7 @@ const paths: Record<Name, React.ReactNode> = {
   warning: <><path d="M12 4l9 16H3z" /><path d="M12 10v4" /><path d="M12 17.5v.5" /></>,
   clock: <><circle cx="12" cy="12" r="8.5" /><path d="M12 7v5l3 2" /></>,
   lock: <><rect x="4.5" y="10.5" width="15" height="10" rx="2" /><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" /></>,
+  arrow: <><path d="M5 12h13" /><path d="M14 7l5 5-5 5" /></>,
 };
 
 export function Icon({ name, className = "w-5 h-5" }: { name: Name; className?: string }) {
