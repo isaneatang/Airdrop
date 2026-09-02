@@ -4,7 +4,7 @@ import { useWallet } from "../wallet/WalletContext";
 import { useChainClock } from "../hooks/useChainClock";
 import { useTx } from "../hooks/useTx";
 import { Button, Card, Field, Input, Amount } from "../components/ui";
-import { Select } from "../components/Sheet";
+import { Select, Sheet } from "../components/Sheet";
 import { TxFeedback } from "../components/TxFeedback";
 import { ConnectPrompt, WrongNetwork } from "../components/Connect";
 import { publicClient, PAYMENT_STREAM_ADDRESS } from "../lib/chain";
@@ -12,6 +12,7 @@ import { paymentstreamAbi } from "../lib/abi";
 import { erc20Abi, type TokenMeta } from "../lib/erc20";
 import { fetchToken } from "../lib/streams";
 import { vestedAmount } from "../lib/vesting";
+import { fetchCuratedTokens } from "../lib/tokenList";
 
 const HOUR = 3600n;
 const DAY = 86_400n;
@@ -49,6 +50,33 @@ export function CreateScreen() {
   const [token, setToken] = useState<TokenMeta | null>(null);
   const [balance, setBalance] = useState<bigint | null>(null);
   const [allowance, setAllowance] = useState<bigint | null>(null);
+  const [curatedTokens, setCuratedTokens] = useState<TokenMeta[]>([]);
+  const [curatedBalances, setCuratedBalances] = useState<Record<string, bigint>>({});
+  const [tokenPickerOpen, setTokenPickerOpen] = useState(false);
+  const [customToken, setCustomToken] = useState(false);
+  const [tokenSearch, setTokenSearch] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCuratedTokens().then(async (items) => {
+      if (cancelled) return;
+      setCuratedTokens(items);
+      const balances = await Promise.all(items.map(async (item) => {
+        try {
+          const value = await publicClient.readContract({ address: item.address, abi: erc20Abi, functionName: "balanceOf", args: [account as Address] });
+          return [item.address.toLowerCase(), value as bigint] as const;
+        } catch {
+          return [item.address.toLowerCase(), 0n] as const;
+        }
+      }));
+      if (!cancelled) setCuratedBalances(Object.fromEntries(balances));
+    });
+    return () => { cancelled = true; };
+  }, [account]);
+
+  useEffect(() => {
+    if (!tokenPickerOpen) setTokenSearch("");
+  }, [tokenPickerOpen]);
 
   // Resolve token metadata as soon as the address looks real.
   useEffect(() => {
@@ -123,6 +151,11 @@ export function CreateScreen() {
     account && recipient.toLowerCase() !== account.toLowerCase() && durationSec >= HOUR);
 
   const needsApproval = Boolean(parsed && allowance !== null && allowance < parsed);
+  const ownedTokens = curatedTokens.filter((item) => (curatedBalances[item.address.toLowerCase()] ?? 0n) > 0n);
+  const visibleTokens = (ownedTokens.length ? ownedTokens : curatedTokens).filter((item) => {
+    const query = tokenSearch.toLowerCase();
+    return !query || item.name.toLowerCase().includes(query) || item.symbol.toLowerCase().includes(query) || item.address.toLowerCase().includes(query);
+  });
 
   const approve = async () => {
     if (!walletClient || !account || !token || !parsed) return;
@@ -173,15 +206,38 @@ export function CreateScreen() {
   return (
     <div className="space-y-4">
       <Card className="space-y-4 p-5">
-        <Field label="Token address" error={errors.token} hint={token ? `${token.name} (${token.symbol})` : "The ERC-20 to stream"}>
-          <Input
-            value={tokenAddress}
-            onChange={(e) => setTokenAddress(e.target.value.trim())}
-            placeholder="0x..."
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </Field>
+        <div>
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <span className="text-xs font-medium text-ink-300">Token</span>
+            <button type="button" className="text-[11px] text-moss-300 hover:text-moss-200" onClick={() => setCustomToken((value) => !value)}>
+              {customToken ? "Choose listed token" : "Use custom token"}
+            </button>
+          </div>
+          {customToken || curatedTokens.length === 0 ? (
+            <Field label="Token address" error={errors.token} hint={token ? `${token.name} (${token.symbol})` : "Add a token contract not in the curated list"}>
+              <Input value={tokenAddress} onChange={(e) => setTokenAddress(e.target.value.trim())} placeholder="0x..." spellCheck={false} autoComplete="off" />
+            </Field>
+          ) : (
+            <>
+              <button type="button" onClick={() => setTokenPickerOpen(true)} className="flex w-full items-center justify-between rounded-xl border border-ink-600 bg-ink-900 px-4 py-3 text-left hover:border-moss-400">
+                <span><span className="block text-xs text-ink-400">Choose token</span><span className="block text-sm text-ink-100">{token ? `${token.symbol} · ${token.name}` : "Select a token"}</span></span>
+                <span className="text-xs text-moss-300">{token ? "Change" : "Open list"}</span>
+              </button>
+              <Sheet open={tokenPickerOpen} onClose={() => setTokenPickerOpen(false)} title="Choose a token">
+                <div className="space-y-3">
+                  <Input value={tokenSearch} onChange={(event) => setTokenSearch(event.target.value)} placeholder="Search listed tokens" autoComplete="off" />
+                  {visibleTokens.map((item) => (
+                    <button key={item.address} type="button" onClick={() => { setTokenAddress(item.address); setTokenPickerOpen(false); }} className="flex w-full items-center justify-between rounded-xl px-4 py-3 text-left text-ink-100 hover:bg-ink-800">
+                      <span><span className="block text-sm">{item.symbol} · {item.name}</span><span className="block text-xs text-moss-300"><Amount value={curatedBalances[item.address.toLowerCase()] ?? 0n} decimals={item.decimals} precision={4} /></span></span>
+                      <span className="text-xs text-moss-300">Select</span>
+                    </button>
+                  ))}
+                  {visibleTokens.length === 0 && <p className="px-4 py-3 text-sm text-ink-400">No listed token matches that search.</p>}
+                </div>
+              </Sheet>
+            </>
+          )}
+        </div>
 
         <Field label="Recipient" error={errors.recipient}>
           <Input
