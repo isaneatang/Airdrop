@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* One explicit stacking scale. PART 10: wallet in-app browsers render their own
+   overlays into the page, and ad-hoc z-index values lose to them unpredictably.
+   Every layered element in this app reads from these and nothing else. */
+:root {
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-nav: 20;
+  --z-overlay: 30;
+  --z-sheet: 40;
+  --z-toast: 50;
+
+  /* 100vh includes the wallet's native toolbar inside these WebViews, which puts
+     the bottom of the page out of reach. dvh tracks the visible viewport; the vh
+     line is the fallback for engines without it. */
+  --app-height: 100vh;
+}
+@supports (height: 100dvh) {
+  :root {
+    --app-height: 100dvh;
+  }
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-ink-900 text-ink-200 font-sans antialiased;
+    /* Wallet WebViews overscroll into a white gutter that ignores the body
+       background. Painting the root the same value hides the seam. */
+    background-color: #161a18;
+    margin: 0;
+    min-height: var(--app-height);
+    overscroll-behavior-y: none;
+  }
+
+  /* Every figure in this app is a number that changes while you watch it.
+     Proportional digits jitter as they tick, which reads as broken rather than
+     live. RESEARCH.txt 9.2. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  button {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Focus is visible and uses the accent, never removed. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-moss-500/70 ring-offset-2 ring-offset-ink-900;
+  }
+}
+
+@layer utilities {
+  .safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  }
+  .h-app {
+    height: var(--app-height);
+  }
+  .min-h-app {
+    min-height: var(--app-height);
+  }
+}

@@ -1,0 +1,26 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "0.8.28"
+evm_version = "paris"          # BOT Chain EVM level unverified; paris avoids PUSH0/TSTORE
+optimizer = true
+optimizer_runs = 20_000
+via_ir = false
+bytecode_hash = "none"
+fs_permissions = [
+    { access = "read", path = "./tooling/out" },      # generator artefacts, read by the deploy scripts
+    { access = "read", path = "./tooling/recipients.csv" },
+    { access = "read-write", path = "./deployments" }, # deployment records, written only under --broadcast
+]
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/",
+]
+
+[fuzz]
+runs = 4096
+
+[invariant]
+runs = 256
+depth = 64

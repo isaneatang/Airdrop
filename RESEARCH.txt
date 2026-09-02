@@ -1,0 +1,1376 @@
+================================================================================
+VESTED DISTRIBUTION PROTOCOL
+Research, security review, and implementation record
+================================================================================
+
+Target        BOT Chain (Testnet 968, Mainnet 677)
+Source docs   vesting-blueprint.md (spec), Universal.txt (UI constraints)
+Date          2026-09-01. Deploy scripts added 2026-09-02 (PART 8.2).
+Toolchain     Foundry 1.7.1, solc 0.8.28, OpenZeppelin Contracts 5.6.1 (pinned),
+              Node 26.8.1, @openzeppelin/merkle-tree 1.0.8
+Status        83 tests passing, 100% line and function coverage on src/
+              PaymentStream live on testnet 968, verified. Frontend built.
+
+
+================================================================================
+PART 0. WHAT THIS DOCUMENT IS
+================================================================================
+
+The blueprint was a specification, not code. This document records:
+
+  (a) the structure it specified, described precisely enough to audit;
+  (b) what was found wrong with it, ranked by severity, with proof;
+  (c) what was changed, and why each change is the change it is;
+  (d) evidence that the fixes hold.
+
+One finding is critical: the specified cancellation logic drains the contract.
+It is reproduced as a passing test against a model of the original design, so
+the claim is demonstrated rather than asserted. See PART 2, finding C-1.
+
+Method: the blueprint was read against the pinned OpenZeppelin 5.6.1 source
+rather than against recollection of its API. Three claims in the blueprint were
+checked directly against that source and all three held (PART 6.4).
+
+
+================================================================================
+PART 1. THE EXISTING STRUCTURE, AS SPECIFIED
+================================================================================
+
+1.1 THESIS
+
+"Chain as witness, not custodian." The contract holds funds and enforces a
+schedule. It never claims title, never takes custody in the legal sense, and
+never trusts an off-chain actor to decide who gets paid.
+
+Operationally this means: no owner, no pause, no upgrade path, no sweep, no
+rescue function. Every one of those is an escape hatch, and an escape hatch is
+the trust the design exists to remove.
+
+1.2 SHAPE
+
+One pure math library feeding two products with deliberately opposite trust
+postures:
+
+    VestingMath  (pure, stateless, no external calls)
+         |
+         +-- PaymentStream        1 to 1,  revocable at creator's option
+         +-- MerkleVestedAirdrop  1 to N,  non-revocable, hard-coded
+
+                       PaymentStream        MerkleVestedAirdrop
+    Shape              1 sender, 1 recip    1 funder, N recipients
+    Funder gas         O(1) per stream      O(1) total, any N
+    Recipient list     n/a                  Merkle root, 32 bytes on chain
+    Revocable          yes, set at create   no, not configurable
+    Use case           salary, contractor   token launch, community drop
+
+1.3 WHY REVOCABILITY DIFFERS
+
+This asymmetry is the strongest idea in the blueprint and survives review intact.
+
+Streams fund ongoing work. If delivery stops in week two, the payer must be able
+to recover the unstreamed remainder. Cancellation splits at the current
+timestamp: accrued to the recipient, remainder to the sender.
+
+Airdrops are different in kind. If the issuer can claw back, recipients hold a
+promise rather than an entitlement, which is strictly worse than a plain
+transfer because it adds gas and a claim flow to something that still requires
+trusting the issuer. The credible commitment is the product.
+
+Critically: making it a toggle does not give recipients a choice. It lets every
+issuer pick the weaker version, and it destroys the guarantee for everyone
+downstream, because a claimant can no longer tell from the contract type alone
+whether their allocation is real. Non-revocability has to be structural to mean
+anything.
+
+1.4 THE ACCRUAL ENGINE, AS SPECIFIED
+
+    function vestedAmount(uint256 total, uint64 start, uint64 cliff,
+                          uint64 end, uint64 timestamp)
+        internal pure returns (uint256)
+    {
+        if (timestamp < cliff)  return 0;
+        if (timestamp >= end)   return total;
+        unchecked {
+            // end > start guaranteed by constructor validation
+            return (total * (timestamp - start)) / (end - start);
+        }
+    }
+
+Five invariants were stated: monotonic, bounded by total, exact at and past end,
+zero before cliff, no overflow. All five are correct as goals. The terminal
+exactness branch is the important one: returning `total` directly rather than
+computing it is what releases the dust that integer division truncates away over
+the life of the schedule. Computing the final payout as a fraction strands funds.
+
+1.5 PAYMENTSTREAM, AS SPECIFIED
+
+State: a Stream struct (sender, recipient, token, deposit, withdrawn, start,
+cliff, end, revocable, cancelled) in a mapping, keyed by a monotonic counter.
+
+The counter is right and the blueprint says why: hash-derived IDs collide when
+the same sender opens two identical streams, and the second silently overwrites
+the first.
+
+Three entrypoints: create (validate, pull tokens measuring the balance delta,
+store, emit), withdraw (claimable = vested minus withdrawn, effects before
+interactions), cancel (split at now, assert the accounting, freeze, transfer
+both legs).
+
+1.6 MERKLEVESTEDAIRDROP, AS SPECIFIED
+
+All schedule parameters immutable. No owner, no pause, no upgrade. Two mappings:
+a claimed bitmap and a cumulative claimed amount, both keyed by leaf index.
+
+Leaf encoding:
+
+    bytes32 leaf = keccak256(bytes.concat(keccak256(
+        abi.encode(index, account, amount))));
+
+The double hash is correct and the reasoning given is correct: with a single
+hash, a 64-byte leaf preimage is indistinguishable from the concatenation of two
+sorted internal nodes, so an attacker can present an internal node as a leaf and
+forge a claim. Hashing twice puts leaves in a different preimage domain from
+internal nodes. Using abi.encode rather than abi.encodePacked is also correct,
+because packed encoding admits ambiguous preimages across adjacent fields.
+
+Funding is two-step by design: deploy, transfer tokens in, then call activate(),
+which checks the balance covers totalAllocated. This avoids an approve and
+transferFrom dance in the constructor and makes underfunding loud instead of
+silently breaking the last claimant.
+
+Payout always goes to the account committed in the leaf, never to msg.sender.
+This is the single best decision in the airdrop design and PART 2 explains why
+it also closes the front-running surface for free.
+
+1.7 WHAT THE BLUEPRINT GOT RIGHT
+
+Recorded plainly, because a review that only lists faults misrepresents the
+document:
+
+  - Library isolated as the single point of failure and gated first in the
+    build order.
+  - Terminal exactness, with the dust reasoning spelled out.
+  - Double-hashed leaves with abi.encode.
+  - Pay the leaf's account, never the caller.
+  - Balance-delta measurement on intake for fee-on-transfer tokens.
+  - SafeERC20 rather than hand-rolled low-level calls, with the return-bomb
+    reasoning attached.
+  - An explicit unsupported list instead of an admin bypass "to help".
+  - Refusal to add sweep or recoverTokens, and the reason given.
+  - An adversarial test matrix, including internal-node-as-leaf.
+  - Honest positioning: Sablier proved streaming in 2019, Uniswap proved Merkle
+    claims in 2020, and the pitch does not claim novelty.
+
+
+================================================================================
+PART 2. FINDINGS
+================================================================================
+
+Ranked by severity. Each names the fix and where it landed.
+
+--------------------------------------------------------------------------------
+C-1  CRITICAL. Cancellation drains the contract.
+     blueprint line 137. Fixed in src/PaymentStream.sol cancel().
+--------------------------------------------------------------------------------
+
+The spec says:
+
+    "Mark cancelled, set end = block.timestamp so future accrual is frozen"
+
+It does the exact opposite. VestingMath returns `total` for every timestamp at
+or past `end`. Moving `end` into the past therefore makes the FULL deposit read
+as vested, forever after.
+
+Exploit, with numbers:
+
+  1. Sender opens a 1000-token stream, start = now, end = now + 30 days.
+  2. At day 10 the sender cancels. Recipient is paid ~333, sender refunded ~667.
+     `end` is now day 10. The split itself was correct.
+  3. At day 11 the recipient calls withdraw. `timestamp >= end`, so vested reads
+     as the full 1000. claimable = 1000 - 333 = 667.
+  4. That 667 was already refunded to the sender. The transfer still succeeds,
+     paid out of OTHER streams' deposits. The contract is now insolvent and the
+     last stream to withdraw reverts.
+
+Worse variant: cancel a stream whose `start` is in the future. Now `end < start`,
+inverting the schedule. Same drain, plus `end - start` underflows inside the
+unchecked block if the division branch is ever reached.
+
+The fix is not to freeze `end` more carefully. It is to not touch `end` at all.
+Cancellation already settles both legs in the same call, so nothing legitimate
+remains to withdraw afterwards. The implemented cancel():
+
+    s.cancelled = true;
+    s.deposit   = vested;   // schedule now tops out at what actually accrued
+    s.withdrawn = vested;   // and it has all been delivered
+
+With deposit == withdrawn, claimable is structurally zero at every future
+timestamp including past the original `end`. withdraw() additionally reverts
+with StreamIsCancelled, so the failure is legible rather than a silent zero.
+
+PROOF: test/CancelRegression.t.sol contains LegacyCancelStream, a minimal model
+of the original logic. Four tests:
+
+  test_Legacy_CancelThenWithdraw_OverReleasesFullDeposit
+      passes, i.e. it demonstrates the original design re-exposes the sender's
+      refunded remainder one second after cancellation.
+  test_Fixed_CancelThenWithdraw_Reverts
+      claimable is 0 immediately after, withdraw reverts, and still 0 a year
+      past the original end.
+  test_Fixed_CancellationCannotTouchAnotherStreamsFunds
+      an unrelated stream still pays out in full after a cancellation.
+  test_Fixed_CancelBeforeStart_RefundsAllAndStaysSettled
+      the inverted-schedule variant: full refund, nothing accrued, contract
+      balance zero, stays settled past the original end.
+
+--------------------------------------------------------------------------------
+C-2  HIGH. The spec contradicts itself on what cancel() pays.
+     blueprint line 138 vs line 256. Resolved.
+--------------------------------------------------------------------------------
+
+  Line 138: "then transfer both legs"            -> cancel pays the recipient
+  Line 256: "Withdraw after cancel -> only the   -> cancel does NOT pay the
+            frozen accrued amount"                  recipient; they withdraw later
+
+These are two different contracts. An implementer picks one and half the test
+matrix is then wrong.
+
+RESOLVED as pay-both-legs-at-cancel. It is atomic, it leaves one fewer state to
+reason about, and it removes the entire post-cancel withdraw surface that
+produced C-1. The corresponding matrix row is now "withdraw after cancel
+reverts", implemented as test_Withdraw_OnCancelledStreamReverts.
+
+--------------------------------------------------------------------------------
+C-3  HIGH. The library is unchecked but validates nothing itself.
+     blueprint lines 64 to 67. Fixed in src/libraries/VestingMath.sol.
+--------------------------------------------------------------------------------
+
+The blueprint calls VestingMath "the single point of failure" (line 45) and then
+makes it the one component that trusts its inputs. Both subtractions sit inside
+`unchecked` and their safety rests on a comment plus the caller having validated
+`cliff >= start` and `end > start`. Because the function is `internal pure`, any
+future caller (a new contract, a view helper, a script) gets silent wraparound
+instead of a revert. A wrapped `timestamp - start` produces an astronomically
+large multiplier.
+
+Separately, `total` was typed uint256 while invariant 5 required it to be at most
+uint128 max. The type system should carry that, not prose.
+
+FIX, and this is the part worth reading, because it costs nothing:
+
+    if (timestamp >= end)   return total;
+    if (timestamp <= start) return 0;
+    if (timestamp < cliff)  return 0;
+    unchecked { return (uint256(total) * (timestamp - start)) / (end - start); }
+
+Reordering the guards makes the function total. To reach the unchecked block a
+call must pass `timestamp < end` AND `timestamp > start`, which together prove
+`start < timestamp < end` and therefore `end > start`. Both subtractions are now
+underflow-free for EVERY possible argument, including a corrupt or unvalidated
+schedule. No revert added, no validation duplicated on the read path, no reliance
+on the caller.
+
+`total` is now uint128, so the overflow bound is enforced by the compiler:
+total < 2^128 and (timestamp - start) < (end - start) <= 2^64, so the product is
+bounded by 2^192 and cannot overflow uint256. The blueprint's arithmetic on this
+point was correct; only its enforcement was prose.
+
+A separate `validateSchedule(start, cliff, end)` is called at creation by both
+contracts. It exists to fail loudly and early on a useless schedule, not to make
+vestedAmount safe, and it also enforces the minimum-duration floor from C-9.
+
+PROOF: testFuzz_TotalFunctionOnUnvalidatedSchedules deliberately does NOT
+normalise its inputs. `end` may be at or below `start`, `cliff` may sit outside
+the range. 4096 runs, bound holds, no revert. That is precisely the input space
+the original unchecked block wrapped on.
+
+--------------------------------------------------------------------------------
+C-4  HIGH. The on-chain accounting assert is a tautology.
+     blueprint line 136. Replaced.
+--------------------------------------------------------------------------------
+
+The spec asks for this to be encoded on-chain rather than only tested:
+
+    recipientOwed + senderRefund + withdrawn == deposit
+
+Substituting the definitions given two lines above:
+
+    (vested - withdrawn) + (deposit - vested) + withdrawn == deposit
+     ->  deposit == deposit
+
+It reduces to an identity. It can only fail on overflow, which 0.8.x already
+catches. It burns gas and, worse, creates the impression that cancellation
+accounting is verified on-chain when nothing is being verified. It would not
+have caught C-1.
+
+REPLACED with a check that can actually fail: `vested > deposit` reverts with
+AccrualExceedsDeposit (and AccrualExceedsAllocation in the airdrop). That is
+invariant 2 of the blueprint's own list, enforced at the point of use. It is
+unreachable given a correct VestingMath, which is the point: it halts rather
+than paying one stream out of another stream's balance if the shared library
+ever regresses.
+
+Note on ordering, which matters: the bound is checked on the full uint256 BEFORE
+narrowing to uint128. Checking after the cast would let a hypothetical
+over-accrual truncate into a small value that slips past the guard. See
+PaymentStream._vested().
+
+A per-token liability counter was considered and rejected. It would be a
+stronger invariant, but decrementing it by the nominal payout while a
+fee-on-transfer token reduces the balance by payout plus fee would brick the
+contract for exactly the token class the stream is supposed to support.
+
+--------------------------------------------------------------------------------
+C-5  MEDIUM. Fee-on-transfer is unsupportable in the airdrop, but the token
+     table implies otherwise. blueprint line 198. Documented and split.
+--------------------------------------------------------------------------------
+
+The mitigation "measure balanceAfter - balanceBefore on intake" works for
+PaymentStream, where the deposit is recorded after the transfer lands. It cannot
+work for MerkleVestedAirdrop: per-recipient amounts are baked into the Merkle
+leaves before deployment and totalAllocated is immutable. If funding loses 2% to
+a fee, activate() can never pass; loosen the check and the final claimants revert.
+
+FIX: the row is split. Fee-on-transfer is supported for streams and unsupported
+for the airdrop, stated in the airdrop's contract-level NatSpec. See the
+corrected table in PART 7.
+
+--------------------------------------------------------------------------------
+C-6  MEDIUM. totalAllocated was never bound to the sum of the tree.
+     blueprint lines 151 and 186. Fixed in tooling/build-tree.mjs.
+--------------------------------------------------------------------------------
+
+totalAllocated is immutable and activate() checks the balance against it, but
+nothing tied it to the actual sum of leaf amounts. If the tree sums to more than
+totalAllocated, activate() passes, early claimants succeed, and late claimants
+revert on an empty balance. That is exactly the failure the funding design was
+introduced to prevent, so activate() would have been a false solvency signal.
+
+FIX: build-tree.mjs derives the root and totalAllocated from the SAME pass over
+recipients.csv and writes deploy-args.json. The deploy reads that file; the
+figure is never hand-typed. test_DeployArgsMatchTheTree pins the two artefacts
+together, and test_Claim_AllRecipientsFullyPaid_NoDustStranded proves the sum of
+full claims empties the contract to exactly zero.
+
+--------------------------------------------------------------------------------
+C-7  MEDIUM. Duplicate leaf indices were not validated off-chain.
+     blueprint line 281. Fixed in tooling/build-tree.mjs.
+--------------------------------------------------------------------------------
+
+The script was specified to reject duplicate addresses, zero addresses and zero
+amounts. It was not specified to reject duplicate INDEX. Since claimedAmount is
+keyed by index alone, two leaves sharing an index cross-contaminate: recipient
+A's claim advances the counter that gates recipient B, and B's payout is computed
+against A's accrual.
+
+FIX: uniqueness on index is enforced, and indices must additionally be contiguous
+from zero, so they cannot silently drift from row order. Verified against seven
+malformed inputs, all rejected: duplicate index, duplicate address, zero amount,
+zero address, non-contiguous index, amount exceeding uint128, malformed address.
+
+--------------------------------------------------------------------------------
+C-8  LOW to MEDIUM. Dead and duplicated state.
+     blueprint lines 156 and 182, 42. Removed.
+--------------------------------------------------------------------------------
+
+claimedBitMap was declared and then disclaimed in the same document: "the bitmap
+is only useful if you also want an O(1) has-this-index-ever-claimed view". Under
+vesting an index is claimed repeatedly, so a boolean bit is not an authority over
+anything. It is a second source of truth for a fact the cumulative mapping
+already holds, which is a divergence waiting to happen, and it costs an extra
+SSTORE on the first claim of every index.
+
+REMOVED. "Has ever claimed" is `claimedAmount[index] != 0`.
+
+IVestingSchedule.sol was declared in the architecture tree and never defined. An
+interface no contract implements is a file that compiles and does nothing. The
+two products have genuinely different shapes (a stream is addressed by id, a
+claim by index plus proof), so forcing a shared interface would be contortion
+rather than abstraction.
+
+REMOVED, deliberately, rather than written. The frontend types are generated
+from the ABIs.
+
+--------------------------------------------------------------------------------
+C-9  LOW. Assorted, all closed.
+--------------------------------------------------------------------------------
+
+  Minimum duration was recommended for streams only (line 219). Now enforced for
+  both, via VestingMath.MIN_DURATION = 1 hour in validateSchedule. Over an hour
+  or more, a validator nudging block.timestamp by seconds moves the payout by a
+  negligible fraction; below it, timestamp manipulation becomes material.
+
+  No pragma or pinned dependency version anywhere. Now solc 0.8.28 exactly and
+  OpenZeppelin pinned to v5.6.1. SafeERC20 semantics shifted across 4.x to 5.x
+  (safeApprove removed in favour of forceApprove), so an unpinned import is a
+  real supply-chain and correctness risk.
+
+  uint64(block.timestamp) cast was never mentioned. Now explicit, and safe until
+  year 2554.
+
+  withdraw(id, 0) meaning "withdraw everything" was an ambiguous API that
+  collides with rejecting zero-amount withdrawals. Replaced with an explicit
+  withdrawMax(id). No magic zero.
+
+  Two decisions the blueprint left open (lines 119 and 125) are now resolved and
+  documented in NatSpec at the function. See PART 4.
+
+  EVM version. The blueprint did not state one. foundry.toml pins evm_version =
+  "paris", which avoids PUSH0 and transient storage. BOT Chain's EVM level is
+  unverified; this is the conservative floor. If the chain is confirmed
+  Shanghai or later, raising it is a one-line change and a redeploy.
+  ReentrancyGuard is used rather than ReentrancyGuardTransient for the same
+  reason, since the latter requires EIP-1153.
+
+--------------------------------------------------------------------------------
+2.10  FINDINGS THAT WERE CHECKED AND HELD
+--------------------------------------------------------------------------------
+
+Not everything flagged during review survived scrutiny. Recorded for honesty:
+
+  The uint128 bound on `received` in create() was initially written as
+  `received > type(uint128).max || received > amount`. The first clause is
+  unreachable, because `amount` is uint128 and `received <= amount`. Removed as
+  dead code before it reached the final source.
+
+  The overflow arithmetic in blueprint invariant 5 is correct as stated. Only its
+  enforcement mechanism (a comment) was weak.
+
+  The front-running analysis at lines 211 to 213 is correct on all three counts.
+  A recipient front-running cancel() with withdraw() gains nothing, which is
+  now a test rather than an assertion: test_Cancel_FrontRunByRecipientIsNeutral
+  runs both orderings at the same timestamp and asserts equal totals.
+
+
+================================================================================
+PART 3. WHAT WAS BUILT
+================================================================================
+
+    src/libraries/VestingMath.sol          61 lines   accrual engine, total function
+    src/PaymentStream.sol                 233 lines   1:1 streaming
+    src/MerkleVestedAirdrop.sol           144 lines   1:N vested claims
+
+    test/VestingMath.t.sol                132 lines   11 tests, 5 invariants fuzzed
+    test/PaymentStream.t.sol              396 lines   31 tests
+    test/MerkleVestedAirdrop.t.sol        253 lines   18 tests
+    test/CancelRegression.t.sol           149 lines    4 tests, C-1 proof
+    test/EncodingParity.t.sol              80 lines    2 tests, cross-language
+    test/Deploy.t.sol                     288 lines   16 tests, script preflight
+    test/mocks/Tokens.sol                 123 lines   5 hostile token models
+
+    script/Deploy.s.sol                   291 lines   both deploys, preflighted
+    tooling/build-tree.mjs                118 lines   generator, self-verifying
+    tooling/sync-abi.mjs                   28 lines   ABIs into the frontend
+    tooling/recipients.csv                  5 lines   worked example
+
+    web/                                3,319 lines   React frontend, see 9.6
+      src/lib/vesting.ts                   71 lines   accrual mirror, parity-tested
+      src/components/Sheet.tsx            160 lines   the dropdown replacement
+      scripts/verify-vesting-parity.ts    120 lines   mirror vs deployed contract
+
+Contract sizes, well inside the 24,576 byte limit:
+
+    PaymentStream          6,357 bytes runtime   (18,219 margin)
+    MerkleVestedAirdrop    3,283 bytes runtime   (21,293 margin)
+
+Gas, median of observed runs:
+
+    create        180,206        withdrawMax     55,634
+    cancel         78,049        claimableOf      2,671 (view)
+    withdraw       32,771        vestedOf         9,304 (view)
+
+The Stream struct packs into 4 storage slots: (sender, start, revocable,
+cancelled), (recipient, cliff), (token, end), (deposit, withdrawn).
+
+
+================================================================================
+PART 4. DESIGN DECISIONS RESOLVED
+================================================================================
+
+The blueprint deferred two decisions with "decide and document". Both are now
+decided, and the reasoning lives in NatSpec at the function so it does not drift
+from the code.
+
+4.1 MAY `start` BE IN THE PAST? Yes.
+
+Backdating is a real payroll case: work began before the stream was set up. It
+costs the sender nothing they did not choose to commit, because the deposit is
+pulled in full at creation either way. The backdated portion simply becomes
+claimable immediately. Backdating past `end` degenerates to a transfer with extra
+steps, which is harmless.
+
+4.2 WHO MAY CALL withdraw()? Anyone.
+
+Funds always go to the stored recipient, so a third party can only pay gas on
+the recipient's behalf. This enables gasless UX via a relayer and mirrors the
+airdrop's claim-for-another property, which is the same argument the blueprint
+already makes at line 180 for claims. Verified by
+test_Withdraw_AnyoneMayTrigger_FundsGoToRecipient: recipient is paid, relayer
+receives nothing.
+
+4.3 IS activate() PERMISSIONED? No, deliberately.
+
+It stores no role and grants no authority. The only state it can reach is
+funded = true, and only when the balance covers every leaf. Anyone calling early
+simply reverts. Adding an owner here to gate a function that cannot be abused
+would reintroduce exactly the trust the design removes.
+
+The concern that a third party could donate tokens to force premature activation
+is answered by C-6, not by access control: with totalAllocated derived from the
+same pass that built the root, reaching the threshold IS full solvency.
+
+4.4 SHOULD STREAMS BE ENUMERABLE ON-CHAIN? No.
+
+A mapping(address => uint256[]) for sender and recipient would cost an SSTORE
+per side on every create to serve a frontend query. The events are indexed on
+streamId, sender and recipient, which is what an indexer consumes.
+
+This is a real trade-off, not a free win, and it is the one open operational
+risk in the frontend: public RPCs commonly cap getLogs block ranges, so "My
+streams" needs either a light indexer or paginated log scanning anchored at the
+deployment block. Flagged in PART 9.
+
+
+================================================================================
+PART 5. DEAD CODE POLICY
+================================================================================
+
+Requirement: no dead or unused code. Enforced mechanically, not by eye.
+
+REMOVED DURING IMPLEMENTATION
+
+  claimedBitMap and its mapping                     C-8
+  IVestingSchedule.sol                              C-8
+  the tautological cancellation assert              C-4
+  `received > type(uint128).max`, unreachable       PART 2.10
+  Foundry's scaffold (Counter.sol and friends)      template noise
+  two `return true` statements after an assembly
+    `return` in the return-bomb mock                compiler flagged unreachable
+
+AUTOMATED SWEEP, all clean:
+
+  every custom error is reverted somewhere          0 unused
+  every event is emitted somewhere                  0 unused
+  every import symbol is referenced                 0 unused
+  every external/public function is exercised       0 uncalled
+  solc warnings, whole tree                         0
+  forge lint warnings, whole tree                   0
+
+COVERAGE
+
+  src/PaymentStream.sol          100.00% lines, 100.00% funcs
+  src/MerkleVestedAirdrop.sol    100.00% lines, 100.00% funcs
+  src/libraries/VestingMath.sol  100.00% lines, 100.00% funcs
+  Total                          100.00% lines (104/104), 100.00% funcs (15/15)
+
+THE ONLY UNCOVERED BRANCHES, AND WHY THEY STAY
+
+  src/PaymentStream.sol:228        if (vested > deposit) revert ...
+  src/MerkleVestedAirdrop.sol:122  if (vested > amount) revert ...
+
+These two are unreachable by construction and that is deliberate. They are the
+non-tautological replacement for the accounting assert the blueprint asked for
+at line 136 (see C-4). They cost three comparisons and they convert a silent
+cross-stream drain into a revert if VestingMath ever regresses.
+
+They are the only intentionally unreachable lines in src/. Calling them out
+explicitly is the honest position: if you would rather have zero unreachable
+code than a defence against a library regression, delete both lines and the two
+error declarations. The recommendation is to keep them, because C-1 was exactly
+a case where accrual silently exceeded what backed it.
+
+script/Deploy.s.sol carries two more of the same kind, added later and listed
+here so the count stays honest: UnexpectedInitialState, which fires if a freshly
+deployed PaymentStream does not read back empty, and DeployedStateMismatch, which
+fires if an immutable does not read back as the value it was given. Both are
+unreachable against correct contracts and a correct compiler. They exist because
+the alternative to failing loudly at that moment is a wrong address being
+recorded, announced and then funded. Four intentionally unreachable branches in
+the whole tree, all defensive, all named.
+
+
+================================================================================
+PART 6. VERIFICATION EVIDENCE
+================================================================================
+
+6.1 SUITE
+
+    Ran 8 test suites: 83 tests passed, 0 failed, 0 skipped
+
+    VestingMathTest             11    invariants, fuzzed at 4096 runs each
+    PaymentStreamTest           32    full matrix plus hostile tokens
+    MerkleVestedAirdropTest     18    full matrix plus forgery attempts
+    CancelRegressionTest         4    C-1 reproduction and fix
+    EncodingParityTest           2    JS to Solidity round trip
+    DeployMerkleVestedAirdropTest  11 airdrop preflight, artefact round trip
+    DeployPaymentStreamTest      4    stream deploy and chain guard
+    DeployConfigEnvTest          1    the environment-reading layer, isolated
+
+The three Deploy suites are described in 8.2. They call the scripts themselves,
+not a re-implementation of them.
+
+6.2 THE FIVE STATED INVARIANTS, FUZZED
+
+  monotonic across random timestamp pairs                  PASS  4096 runs
+  bounded, never exceeds total                             PASS  4096 runs
+  exact at end and at every point past it                  PASS  4096 runs
+  zero before cliff                                        PASS  4096 runs
+  no overflow at uint128 max with maximum duration         PASS
+
+  plus, beyond the blueprint's list:
+  total function on UNVALIDATED schedules                  PASS  4096 runs
+  rounding always down, never up                           PASS  4096 runs
+  cancellation conserves value at any cancel point         PASS  4096 runs
+  claim never exceeds allocation at any timestamp          PASS  4096 runs
+
+6.3 THE BLUEPRINT'S OWN TEST MATRIX
+
+Every row from lines 241 to 271 is implemented and passing. Two rows changed
+meaning as a consequence of C-2, and one row was added:
+
+  line 256 "withdraw after cancel -> only the frozen accrued amount"
+      now "withdraw after cancel -> reverts", per the resolution in C-2.
+  added: cancel a not-yet-started stream, then attempt withdraw after cliff.
+      This is the inverted-schedule variant of C-1 and the original matrix had
+      no row that would have caught it.
+
+Hostile token results:
+
+  fee-on-transfer 2%     deposit recorded equals measured intake; stream settles
+                         to exactly zero at end, no shortfall
+  fee-on-transfer 100%   create reverts rather than storing an empty stream
+  inflationary rebase    create reverts, AmountTooLarge, rather than mis-account
+  ERC-777 style hook     recursive withdrawMax during transfer reverts through
+                         the ReentrancyGuard
+  return bomb 64KB       create stays under 400,000 gas and the stream pays out
+                         normally, confirming SafeERC20 bounds the returndata copy
+
+6.4 CLAIMS CHECKED AGAINST PINNED OPENZEPPELIN 5.6.1 SOURCE
+
+Rather than rely on recollection of the API, three blueprint claims were read
+out of lib/openzeppelin-contracts at the pinned tag:
+
+  "SafeERC20 bounds returndata copying" (line 201). HOLDS. _safeTransfer issues
+  call(gas(), token, 0, 0x00, 0x44, 0x00, 0x20), so the output buffer is 32
+  bytes and a return bomb is never copied on the success path.
+
+  Nuance the blueprint does not mention: on the FAILURE path with bubbling
+  enabled, SafeERC20 does returndatacopy the full returndata to re-throw the
+  reason. A hostile token that REVERTS with megabytes can therefore still charge
+  the caller memory-expansion gas. The transaction reverts anyway, so this
+  grieves only the caller who chose to interact with that token. Not exploitable
+  here; worth knowing.
+
+  "This is the OpenZeppelin / Uniswap standard" for double-hashed leaves
+  (line 168). HOLDS, and OZ's own MerkleProof header carries the matching
+  warning: "You should avoid using leaf values that are 64 bytes long prior to
+  hashing ... the concatenation of a sorted pair of internal nodes could be
+  reinterpreted as a leaf value."
+
+  Internal nodes use sorted-pair hashing via Hashes.commutativeKeccak256, which
+  is what the off-chain generator must match. StandardMerkleTree does, which is
+  why it is the tool used.
+
+6.5 CROSS-LANGUAGE PARITY
+
+The blueprint calls a mismatch between the generator's leaf encoding and the
+contract's "the single most likely way this project breaks" (line 286). It is
+therefore tested as a real round trip, not as a Solidity re-implementation of
+the same encoding checked against itself.
+
+build-tree.mjs writes proofs.json. EncodingParityTest reads that exact file,
+deploys MerkleVestedAirdrop with the root and totalAllocated from it, funds,
+activates, and claims every entry using the emitted proofs. It asserts each
+recipient receives their exact allocation and the contract is left holding zero.
+
+    root            0x5eab0066553558831972ebb8d68adc8f95f314c42838b9ea229d92fdbdcc19c1
+    totalAllocated  8000000000000000000024
+    recipients      4
+    round-trip      all 4 proofs verified against the root
+
+The generator also replays every proof against its own root before writing any
+file, so it cannot emit an artefact it has not itself verified.
+
+6.6 FORGERY ATTEMPTS, ALL REJECTED
+
+  proof for a different leaf                       InvalidProof
+  inflated amount with a valid proof               InvalidProof
+  substituted account with a valid proof           InvalidProof
+  internal node presented as a leaf                InvalidProof
+
+The last one is worth spelling out. test_Claim_InternalNodePresentedAsLeafReverts
+first asserts that the internal node n01 genuinely verifies against the root at
+depth 1, which is the property that makes single-hashed leaves forgeable. It then
+shows the contract still cannot be made to accept it, because claim() always
+derives the leaf from (index, account, amount) and never accepts a caller-supplied
+node. Leaf preimages are 32 bytes; internal-node preimages are 64. Different
+domains.
+
+
+6.7 TESTNET DEPLOYMENT AND LIVE VERIFICATION
+
+Blueprint build-order step 3, outstanding until now, is done for PaymentStream.
+
+    chain            968 (BOT Chain testnet), confirmed by eth_chainId
+    address          0x2345c73cEdcE23a2959b7259eD3A6d13580ad97e
+    explorer         scan.bohr.life, Blockscout, source verified
+    runtime size     6,433 bytes, matching forge build --sizes exactly
+
+Note that scan.botchain.ai, which the blueprint names, serves chain 677. That is
+MAINNET. The testnet explorer is scan.bohr.life and its verifier URL is that root
+plus /api/. Pointing verification at the mainnet instance fails to find the
+contract, which is a confusing way to learn the difference.
+
+WHAT THE CHAIN ANSWERED, WITHOUT SPENDING A KEY
+
+Two of the three risks PART 13 called out were open only because nobody had asked
+the chain. Both were settled with eth_estimateGas and eth_getLogs, neither of
+which signs anything:
+
+  EVM LEVEL. Chain 968 executes PUSH0 (Shanghai), TSTORE (Cancun, EIP-1153) and
+  MCOPY. Probed by estimating gas on three-byte creation payloads, one per opcode,
+  with a PUSH1/RETURN control. The control is what makes the result trustworthy:
+  when the same probes were run against the mainnet explorer's RPC proxy the
+  control ALSO failed, which shows that proxy simply does not serve
+  eth_estimateGas rather than that mainnet lacks PUSH1. Mainnet's EVM level
+  therefore remains unknown.
+
+  GETLOGS RANGE. No hard cap; the node degrades by timing out. Unfiltered queries
+  fail past roughly 100k blocks, but an ADDRESS-FILTERED query across 20M blocks,
+  which is the whole chain, returns in about 1.5 seconds. Every frontend query
+  filters by contract address, so "My streams" needs no indexer and no pagination.
+  This retires the operational risk flagged at 4.4 and 9.4.
+
+CANCUN WAS MEASURED AND DECLINED, FOR NOW
+
+Since the chain supports EIP-1153, the tree was rebuilt with evm_version = cancun
+and ReentrancyGuardTransient, and the full suite re-run against it. All 83 tests
+pass. Median gas:
+
+    create        180,200 -> 178,258     -1,942   1.1%
+    withdraw       32,771 ->  27,999     -4,772  14.6%
+    withdrawMax    55,634 ->  53,708     -1,926   3.5%
+    cancel         78,049 ->  76,117     -1,932   2.5%
+    claim          86,119 ->  84,186     -1,933   2.2%
+    activate       50,019 ->  50,011         -8   0.0%
+
+The activate row is the control. It is the one entrypoint with no nonReentrant
+modifier and it saved nothing, which confirms the whole difference is the guard
+and not the EVM target generally. Roughly 1,930 gas on every protected call.
+
+DECLINED FOR NOW, and the reason is not the size of the saving. paris bytecode
+runs at every EVM level, so it deploys to mainnet 677 whatever that chain turns
+out to be, and 1,930 gas does not justify carrying an unresolved mainnet
+compatibility question through the rest of the build. It is a one-line change
+plus a redeploy once mainnet's EVM level is confirmed. Nothing depends on which
+is chosen.
+
+LIVE LIFECYCLE, EXERCISED ON CHAIN
+
+A test ERC-20 was deployed, a 100-token two-hour revocable stream opened, watched
+accrue, withdrawn from and cancelled. Cancellation conserved value to the wei:
+
+    sender refunded    98,833,333,333,333,333,334
+    recipient paid          527,777,777,777,777,778
+    contract outflow   99,361,111,111,111,111,112   = refund + payout, delta 0
+    sender + recipient  1,000,000,000,000,000,000,000 = the full original balance
+
+The contract ended holding exactly zero. C-1 was confirmed fixed against a live
+chain rather than only in a test: after cancellation claimableOf returned 0 and
+withdrawMax reverted with 0xa209a345, which is StreamIsCancelled(). Two decisions
+from PART 4 also held in production: withdrawMax called by the SENDER paid the
+RECIPIENT and gave the caller nothing (4.2), and create cost 183,391 gas against
+the 180,206 predicted here.
+
+--------------------------------------------------------------------------------
+C-10  LOW. vestedOf misreported a cancelled stream. Found on testnet.
+      Fixed in src/PaymentStream.sol vestedOf().
+--------------------------------------------------------------------------------
+
+This one is not a blueprint finding. It was introduced by this implementation and
+found by looking at real output on a real chain, which is the honest place to
+record it.
+
+cancel() settles a stream by writing deposit = withdrawn = vested and deliberately
+leaves `end` in the future, because moving `end` is exactly what caused C-1. A
+cancelled stream is therefore fully settled. But vestedOf recomputed accrual from
+the settled deposit, and since `end` is still ahead, it returned a FRACTION of it:
+on the live stream, 16,203,703,703,703,703 against a settled deposit of
+138,888,888,888,888,888.
+
+No funds were ever at risk. claimableOf already special-cased cancellation and
+returned 0, and both withdraw paths check `cancelled` before touching the
+arithmetic. That check is load-bearing rather than defensive tidiness: without it
+`_vested(s) - s.withdrawn` would underflow into a panic on a cancelled stream.
+
+The impact was display. 9.4 specifies pairing vestedOf with deposit to draw the
+vesting bar, so a fully settled stream rendered as barely started.
+
+FIX: vestedOf returns `s.cancelled ? s.deposit : _vested(s)`, making it the third
+view to agree that a cancelled stream is finished.
+
+PROOF: test_VestedOf_OnCancelledStreamReadsAsFullySettled asserts equality with
+the settled deposit immediately after cancellation and again a year past the
+original end. The test was confirmed non-vacuous by reverting the fix, where it
+fails with 111,111,111,111,111,111,111 against 333,333,333,333,333,333,333, a
+third of the settled deposit and exactly the fractional recompute. Verified again
+on chain after redeploying: settled deposit and vestedOf both read
+138,888,888,888,888,888.
+
+
+================================================================================
+PART 7. TOKEN COMPATIBILITY, CORRECTED
+================================================================================
+
+The blueprint's table is right in substance. One row was wrong because it
+applied a stream-only mitigation to both contracts (C-5).
+
+  Hazard              PaymentStream          MerkleVestedAirdrop
+  ------------------  ---------------------  -------------------------------
+  Standard ERC-20     supported              supported
+  Missing return      supported, SafeERC20   supported, SafeERC20
+  Fee-on-transfer     SUPPORTED. deposit is  NOT SUPPORTED. leaf amounts are
+                      the measured intake    fixed pre-deployment and cannot
+                                             be reconciled against a lossy
+                                             transfer. activate() will simply
+                                             never pass.
+  Inflationary        rejected at create,    not supported
+  or rebasing         AmountTooLarge
+  Return bomb         bounded by SafeERC20   bounded by SafeERC20
+  ERC-777 callbacks   CEI plus               CEI plus ReentrancyGuard
+                      ReentrancyGuard
+  Blocklist (USDC)    UNFIXABLE at contract level. If a recipient is
+                      blocklisted their funds are permanently stuck. An admin
+                      bypass "to help" is a backdoor and is not added.
+
+EXPLICITLY OUT OF SCOPE, to state in the README:
+
+  - rebasing and elastic-supply tokens
+  - fee-on-transfer tokens in the airdrop specifically
+  - tokens with a blocklist that can trap recipient funds
+  - recovery of tokens mistakenly sent to either contract
+  - on-chain enforcement of any off-chain agreement the schedule represents
+
+The last two are consequences of having no sweep and no owner. Unclaimed airdrop
+allocations are locked forever. That is the price of the guarantee and it should
+be stated plainly rather than softened.
+
+
+================================================================================
+PART 8. OFF-CHAIN TOOLING AND DEPLOYMENT
+================================================================================
+
+8.1 THE MERKLE GENERATOR
+
+tooling/build-tree.mjs. Usage:
+
+    node tooling/build-tree.mjs tooling/recipients.csv tooling/out
+
+Pipeline: parse (tolerating an optional header row), validate, build, replay,
+emit. It refuses to write anything it has not replayed against its own root.
+
+VALIDATION, all seven rejections verified:
+
+    duplicate index          claimedAmount is keyed by index alone, so two
+                             leaves sharing one cross-contaminate. C-7.
+    duplicate address        bookkeeping error
+    zero address             unclaimable allocation
+    zero amount              unclaimable allocation
+    non-contiguous index     indices must be 0..n-1 so they cannot drift from
+                             row order
+    amount above uint128     VestingMath takes uint128; larger is unclaimable
+    malformed address        parse-time rejection
+
+OUTPUTS
+
+    proofs.json       root, totalAllocated, recipientCount, leafTypes, and
+                      claims keyed by lowercased address for O(1) frontend
+                      lookup
+    deploy-args.json  exactly the constructor arguments, derived from the same
+                      pass that built the root. The deploy reads this. C-6.
+    tree.json         full dump, for regenerating proofs without the CSV
+
+Host proofs.json as a static file. The frontend looks up the connected address
+and submits. If the address is absent, show "not eligible". Do not error.
+
+
+8.2 DEPLOY SCRIPTS
+
+script/Deploy.s.sol. Two script contracts over a shared Deployment base.
+
+    DeployPaymentStream        no arguments, no off-chain dependency
+    DeployMerkleVestedAirdrop  reads tooling/out/deploy-args.json
+
+    forge script script/Deploy.s.sol:DeployPaymentStream \
+        --rpc-url $BOT_RPC_URL --account deployer --broadcast --verify
+
+    AIRDROP_TOKEN=0x... AIRDROP_START=<unix> AIRDROP_CLIFF=<unix> \
+    AIRDROP_END=<unix> \
+    forge script script/Deploy.s.sol:DeployMerkleVestedAirdrop \
+        --rpc-url $BOT_RPC_URL --account deployer --broadcast --verify
+
+SHAPE. Each script separates run(), which reads the environment, from deploy(),
+which takes every input explicitly and holds all the logic. The first reason was
+found the hard way: environment variables are process-global and shared across
+forge's concurrently running test contracts, so a suite that configures itself by
+mutating them races against itself. Four tests failed non-deterministically
+before the split, and they failed on the harness rather than on anything real,
+which is the worst kind of red. Explicit parameters also let one script compose
+another without going through the shell.
+
+WHY THE PREFLIGHT IS LONG. Neither contract has an owner, a pause or an upgrade
+path, so the deploy transaction is the last moment anything can be corrected.
+Every check that CAN run before the broadcast does, because a constructor revert
+on a live chain costs real gas and reports an opaque failure, while the same
+revert in the script costs nothing and names the parameter.
+
+    ExampleRecipientList     tooling/recipients.csv is still the worked example
+                             of 8.1. A contract funded against that root is
+                             unclaimable and unrecoverable forever. Override
+                             with ALLOW_EXAMPLE_RECIPIENTS=1.
+    TokenNotAContract        token is immutable and there is no sweep, so a
+                             mistyped address is permanent. Code at the address
+                             is a weak check, but it catches a typo.
+    MainnetNotConfirmed      chain 677 requires CONFIRM_MAINNET=1. Deploying to
+                             mainnet when testnet 968 was meant is not
+                             retractable.
+    ValueExceedsUint64       envUint returns uint256. A silent narrowing would
+                             write a schedule nobody asked for into an immutable.
+    EmptyTree                empty root, total or recipient count in the
+                             artefact.
+    ScheduleAlreadyFinished  an end date already past makes every allocation
+                             claimable at once.
+    InvalidSchedule          VestingMath's own validation, reached before gas is
+                             spent rather than as an opaque on-chain revert.
+
+The root and totalAllocated are never passed by hand. They come from
+deploy-args.json, which puts C-6 at the point of deployment rather than only in
+the generator.
+
+READBACK. After the broadcast the script reads every immutable back off the
+deployed contract and compares it against what it was given. This cannot undo a
+bad deployment. What it does is stop a wrong one from being recorded, announced
+and then funded, which is the point at which the mistake becomes permanent.
+
+RECORDS. deployments/<chainId>-<contract>.json, one file per contract per chain,
+so a second deployment never has to merge into the first. Written only under
+--broadcast, so dry runs and the test suite leave the tree clean. That is what
+lets the tests exercise the scripts directly instead of a stripped-down copy.
+
+The record's `fromBlock` is a LOWER BOUND on the deployment block, not the block
+the transaction landed in: it is captured during simulation, one block before the
+deploy is mined. "My streams" anchors its paginated log scan there (9.4), and a
+lower bound is the safe direction to be wrong in. The exact receipt is in
+broadcast/ if it is ever needed.
+
+fs_permissions in foundry.toml grants read on ./tooling/out and read-write on
+./deployments. Nothing else.
+
+VERIFICATION. test/Deploy.t.sol, 16 tests, calling the scripts themselves rather
+than a re-implementation. The central one deploys from the generator's real
+artefacts, funds, activates, claims every proof in proofs.json and asserts the
+contract empties to exactly zero. A stale root or a narrowed schedule value would
+not sum.
+
+Both scripts were additionally run end to end against a local anvil node at chain
+id 968: both contracts deployed, the ExampleRecipientList guard refused a real
+broadcast, claim before activate() reverted, and after funding, activating and
+warping past end, recipient 0 was paid exactly 1000000000000000000007 against the
+generator's own proof. That exercises the broadcast path, the record writing and
+the artefact round trip together. No unit test reaches any of the three.
+
+
+================================================================================
+PART 9. FRONTEND AND UI STYLE
+================================================================================
+
+Stack per blueprint: React, Vite, viem, Reown AppKit, Tailwind, Framer Motion.
+
+9.1 THE RULE THAT OUTRANKS THE OTHERS
+
+Never let the UI make an authorization decision. Show state, disable buttons for
+UX, but every constraint is enforced on-chain. A check that exists only in the
+client does not exist. Every guard in PART 2 is in the contract for this reason.
+
+9.2 THE PER-SECOND COUNTER
+
+The blueprint is right that this is the demo: watching a claimable balance rise
+in real time sells the primitive faster than any explanation.
+
+One correctness note. Anchor it to the last block timestamp plus locally elapsed
+time, NOT to Date.now() directly, and clamp the displayed value to
+deposit - withdrawn. If the browser clock runs ahead of chain time the UI shows
+a number the contract will reject, and the withdraw reverts. That is the same
+client-versus-chain divergence 9.1 warns about, arriving through the back door.
+
+Use tabular numerals on every amount:
+
+    font-variant-numeric: tabular-nums;
+
+Without it the digits jitter as they tick, which is the difference between the
+counter reading as a live instrument and reading as broken.
+
+9.3 STYLE, DERIVED FROM Universal.txt
+
+Universal.txt is a negative specification, so the positive style is inferred
+from what it forbids.
+
+PALETTE. Muted charcoal ground, desaturated green as the single accent. No pure
+white anywhere, so the lightest surface is an off-white with a green or warm-grey
+cast. No purple, no neon, no rainbow, no unthemed pastels. The consequence worth
+internalising: hierarchy is carried by VALUE and SPACING, not by hue. Surfaces
+separate by luminance steps.
+
+DEPTH. No glassmorphism, no harsh gradients, no radial orbs, no dot grids, no
+coloured left-border stripes on cards. Flat surfaces, hairline borders,
+restrained shadow. A card's identity comes from its border and background value.
+
+ICONS. Not Lucide. Phosphor, Remix Icon, Tabler, or custom SVG. Phosphor pairs
+best with a muted palette because of its lighter default stroke weight.
+
+TYPE. Inter is explicitly allowed; keep it. Tabular numerals on all figures.
+
+COPY. No em dashes in UI copy or headings. No "it's not X, it's Y" constructions.
+No fake testimonials or placeholder social proof; omit the section entirely if
+real content is not available.
+
+LAYOUT. No bento grid unless content hierarchy actually calls for it. Bottom
+navigation on mobile. For this app: Streams, Create, Airdrop, Account.
+
+ONE APPARENT CONFLICT, RESOLVED. The blueprint specifies Framer Motion and makes
+the ticking counter the centrepiece. That is compatible with the anti-pattern
+list, because the constraint is on DECORATIVE motion, not functional motion.
+Keep the counter animated. Skip page-entrance flourishes.
+
+9.4 SCREENS
+
+    Create stream    form, approve, create, with a live schedule preview
+    My streams       incoming and outgoing tabs
+    Stream detail    vesting bar, per-second counter, withdraw, cancel if
+                     permitted
+    Airdrop claim    connect, eligibility lookup, vested versus locked, claim
+
+Contract views that back these: vestedOf(id) paired with streams(id).deposit
+draws the vesting bar; claimableOf(id) is what the counter interpolates between;
+the airdrop's claimableOf(index, amount) previews a claim without a proof,
+because showing a number to an unproven caller releases nothing.
+
+OPERATIONAL RISK, from 4.4. RETIRED, measured rather than budgeted for. "My
+streams" reads indexed events, and public RPCs commonly cap getLogs block ranges.
+This node does not: an address-filtered query across 20M blocks, the entire chain,
+returns in about 1.5 seconds. No indexer and no pagination. The scan is still
+anchored at the deployment block from the deploy record, because that is free.
+See 6.7 for the measurement, including the unfiltered numbers that would have
+been a problem.
+
+9.5 APPROVE FLOW
+
+create() requires a prior approval. USDT-style tokens revert on a non-zero to
+non-zero approve, so the frontend must zero the allowance first or use a
+forceApprove-equivalent path. This is a frontend concern, not a contract one,
+and it is the single most common cause of a failed first transaction.
+
+
+9.6 WHAT WAS BUILT
+
+web/. React 18, Vite, TypeScript, viem, Tailwind, Framer Motion. 3,319 lines.
+Typecheck clean, production build clean.
+
+    npm run dev         vite dev server
+    npm run build       typecheck then production bundle
+    npm run verify      accrual mirror against the deployed contract
+    npm run sync-abi    regenerate ABIs from the forge artifacts
+
+WALLET CONNECTION. EIP-6963 multi-wallet discovery with a window.ethereum
+fallback, rather than the Reown AppKit the blueprint names. AppKit needs a
+projectId from a hosted account, and 6963 needs nothing, works in exactly the
+in-app wallet browsers PART 10 is about, and is what those browsers inject anyway.
+Desktop QR-to-mobile pairing is the tradeoff. AppKit can be layered on later
+without touching the screens.
+
+THE ACCRUAL MIRROR IS THE RISK, AND IT IS TESTED LIKE ONE
+
+src/lib/vesting.ts is a second implementation of VestingMath, in another language,
+whose output the UI presents as if it were the contract's answer. That is the same
+shape of hazard PART 8 calls the single most likely way this project breaks for
+the Merkle encoding, and it is answered the same way rather than by inspection.
+
+scripts/verify-vesting-parity.ts replays the DEPLOYED contract's vestedOf and
+claimableOf against the mirror at blocks sampled across each stream's whole
+lifetime. Both sides are evaluated AT THE SAME BLOCK, so the comparison is exact
+instead of racing the clock. The sample window is derived per stream from its
+StreamCreated log, because sampling before a stream existed silently skips and
+would overstate how much was actually compared.
+
+    streams checked   3
+    comparisons       144
+    mismatches        0
+
+The three streams on chain cover the cliff, streaming, terminal and cancelled
+branches between them, so C-10's fix is inside the compared surface.
+
+THE COUNTER. Anchored to the last block timestamp plus performance.now() elapsed,
+never Date.now(), and re-synced on an interval and whenever the tab becomes
+visible again, since a backgrounded tab stops firing timers and returns with a
+stale anchor. performance.now() is monotonic, so a user whose clock is wrong, or
+which changes under them, still sees chain time. claimableOf clamps to
+deposit - withdrawn, so the displayed figure can never exceed what the contract
+will pay.
+
+AUTHORISATION. Per 9.1, no constraint lives only in the client. Buttons disable
+for clarity, and every one of those conditions is separately enforced on chain.
+Contract reverts are surfaced by their custom error name rather than as "execution
+reverted", because each of those errors was chosen to say precisely what was
+wrong, and discarding that would leave the user guessing.
+
+STYLE, against the negative specification in Universal.txt. Charcoal ground, one
+desaturated green accent, and one muted clay reserved for destructive actions.
+Hierarchy is carried by luminance and spacing, as 9.3 predicted it would have to
+be. No pure white, no sparkles, no glassmorphism, no gradients, no orbs or dot
+grids, no coloured left-border stripes, no bento grid, no Lucide (icons are custom
+SVG), no em dashes in copy. Every figure renders through one Amount component, so
+tabular numerals are not something anyone has to remember to apply. Motion is
+functional only: the bar transition and a pulse marking the counter as live. No
+page-entrance flourishes.
+
+KNOWN GAP. The bundle is 594 kB, 185 kB gzipped, almost entirely viem. Acceptable
+on desktop, less so over mobile data inside a wallet browser. A code-split pass is
+the fix and has not been done.
+
+
+================================================================================
+PART 10. WALLET BROWSER RENDERING
+================================================================================
+
+Universal.txt reports that dropdowns and selection menus render badly in wallet
+browsers and suspects a wallet browser issue. That is correct, and it is a known
+class of bug rather than a mystery. In-app browsers (MetaMask Mobile, Trust
+Wallet, Coinbase Wallet) run reduced WKWebView or Android WebView inside a native
+shell, which breaks four things independently.
+
+  CAUSE                              SYMPTOM                  FIX
+  ---------------------------------  -----------------------  -------------------
+  native <select> opens a system     picker missing or empty  never use native
+  picker the wallet shell                                     <select>; build the
+  intercepts or paints over                                   control from buttons
+
+  a menu positioned fixed inside     menu clipped, offset,    portal the menu to
+  an ancestor carrying transform,    or off-screen            document.body and
+  filter or will-change: that                                 audit ancestors for
+  ancestor becomes the containing                             transform. Framer
+  block, so fixed resolves against                            Motion applies
+  it, not the viewport                                        transform DURING
+                                                              animation, which is
+                                                              the most likely
+                                                              culprit here.
+
+  100vh includes the wallet's        bottom items unreachable use 100dvh with a
+  native toolbar in these WebViews                            100vh fallback plus
+                                                              env(safe-area-inset-
+                                                              bottom)
+
+  stacking-context collisions with   menu renders behind      one explicit z-index
+  the wallet's own overlays          content                  scale as CSS custom
+                                                              properties, never
+                                                              ad-hoc values
+
+THE ROBUST PATTERN. Below roughly 640px, and in any wallet WebView, replace every
+dropdown with a full-width BOTTOM SHEET rendered into a portal at the document
+root. It sidesteps all four causes at once, gives a larger tap target, and sits
+naturally with the bottom navigation Universal.txt already asks for. On desktop
+the same component renders as a conventional anchored popover.
+
+Detect by capability, not by user-agent string:
+
+    const isInjectedWalletBrowser =
+      typeof window !== "undefined" &&
+      !!window.ethereum &&
+      /Mobi|Android/i.test(navigator.userAgent);
+
+Apply the sheet variant when that is true OR the viewport is narrow.
+
+Affected controls in this app: the token selector on Create, the duration
+presets, and the incoming/outgoing tab switcher on My streams.
+
+Note that glassmorphism is already banned by Universal.txt on aesthetic grounds.
+That ban happens to also remove backdrop-filter, which is unreliable in these
+same WebViews. The style rule and the compatibility fix agree here.
+
+IMPLEMENTED, all four causes, in web/:
+
+    native <select>        none in the app. Every dropdown is Select in
+                           components/Sheet.tsx, built from buttons.
+    transform ancestors    components/Portal.tsx renders sheets into document.body.
+                           Framer Motion applies a transform for the duration of
+                           every animation, so this is not hypothetical here.
+    100vh                  --app-height in index.css is 100dvh behind an @supports
+                           guard with a 100vh fallback, plus a safe-bottom utility
+                           using env(safe-area-inset-bottom).
+    stacking collisions    one --z-* scale in index.css. No ad-hoc z-index values
+                           anywhere in the app.
+
+Detection is by capability, as specified: isInjectedWalletBrowser() in
+lib/wallet.ts tests for an injected provider plus a mobile user agent, and the
+sheet variant is applied on that OR a narrow viewport, so a desktop browser at a
+small window size gets the same treatment.
+
+NOT YET VERIFIED ON A PHYSICAL DEVICE. These are the specified remedies applied
+faithfully, not evidence that the symptom is gone. See PART 12.
+
+
+================================================================================
+PART 11. RUNNING IT
+================================================================================
+
+    forge build                    compile, zero warnings expected
+    forge test                     83 tests
+    forge lint                     zero warnings expected
+    forge test --gas-report        gas per entrypoint
+    forge coverage                 100% lines, 100% functions on src/
+    forge build --sizes            deployed bytecode sizes
+
+    node tooling/build-tree.mjs tooling/recipients.csv tooling/out
+    forge test --match-contract EncodingParityTest
+
+Run the generator BEFORE EncodingParityTest and before the Deploy suites; those
+tests read tooling/out/proofs.json and deploy-args.json, which is the point of
+them.
+
+Deploying (8.2 has the preflight and the guards):
+
+    forge script script/Deploy.s.sol:DeployPaymentStream \
+        --rpc-url $BOT_RPC_URL --account deployer --broadcast --verify
+
+Add --broadcast only when you mean it; without it the script dry-runs, and
+without it nothing is written to deployments/.
+
+Dependencies are pinned: lib/openzeppelin-contracts at v5.6.1, solc 0.8.28 in
+foundry.toml, evm_version = "paris".
+
+
+================================================================================
+PART 12. WHAT IS NOT DONE
+================================================================================
+
+Stated plainly rather than left to be discovered.
+
+  THE AIRDROP IS NOT DEPLOYED, AND CANNOT BE YET. tooling/recipients.csv still
+  holds the four placeholder addresses of the worked example. The root is
+  immutable and there is no owner to correct it afterwards, so deploying against
+  that list would produce a funded contract nobody can claim from and nobody can
+  unwind. This is a business input, not a code gap: the deploy script refuses the
+  example root by default rather than leaving it to be remembered. Everything
+  around it is ready and tested. PaymentStream has no such dependency and is
+  already live.
+
+  NOTHING IS ON MAINNET. Only testnet 968 (6.7). Mainnet 677 has not been
+  deployed to and should not be until its EVM level is confirmed, below.
+
+  MAINNET EVM LEVEL UNCONFIRMED. Testnet 968 is confirmed Cancun by direct probe.
+  Mainnet is NOT: the only mainnet endpoint reachable here is the explorer's RPC
+  proxy, which does not serve eth_estimateGas, and the control probe failing
+  alongside the real ones is how that was established rather than assumed. paris
+  is therefore still the target, deliberately, because paris bytecode runs at
+  every EVM level. 6.7 has the measured cost of that choice, about 1,930 gas per
+  protected call. A mainnet RPC URL settles it in seconds.
+
+  FRONTEND GAPS. Built (9.6), but: the bundle is 594 kB / 185 kB gzipped, almost
+  all viem, and wants a code-split pass before it is served over mobile data; and
+  wallet connection is EIP-6963 only, so desktop users without an extension have
+  no QR-to-mobile path. The airdrop screen is complete but shows a "no
+  distribution is live yet" state until the contract above exists.
+
+  THE FRONTEND HAS NO AUTOMATED UI TESTS. The accrual mirror is verified against
+  the deployed contract (9.6) because that is where a divergence would silently
+  mislead a user. The screens themselves have been exercised by hand only, and
+  the wallet-browser remedies in PART 10 have not been tested on a physical
+  device inside a real in-app browser.
+
+  NO EXTERNAL AUDIT. 83 passing tests and 100% line coverage are evidence, not a
+  substitute. The four intentionally unreachable defensive branches, two in src/
+  and two in script/, are documented in PART 5 so an auditor does not have to
+  rediscover why they are there.
+
+
+================================================================================
+PART 13. SUMMARY
+================================================================================
+
+The blueprint's architecture is sound and its central design argument, that
+revocability must differ between the two products and that non-revocability has
+to be structural rather than configurable, is correct and worth defending under
+questioning.
+
+Its security specification was mostly right. The token compatibility table, the
+double-hash leaf encoding, the decision to pay the leaf's account rather than
+the caller, and the refusal to add any escape hatch are all correct, and two of
+those were verified against pinned OpenZeppelin source rather than taken on
+trust.
+
+Four things were wrong, in descending order of consequence.
+
+The specified cancellation logic drains the contract. Setting end =
+block.timestamp to freeze accrual makes VestingMath report the full deposit as
+vested forever after, letting a cancelled stream's recipient withdraw the
+sender's already-refunded remainder out of other streams' balances. This is
+demonstrated by a passing test against a model of the original design, not
+asserted. The fix is to settle the deposit down to what accrued and never touch
+end.
+
+The spec contradicted itself on whether cancel() pays the recipient, which would
+have sent an implementer down one of two incompatible paths with a test matrix
+matching neither.
+
+The shared library performed unchecked arithmetic while trusting its callers to
+have validated the schedule, in the one component the document itself calls the
+single point of failure. Reordering three guards makes it total across the entire
+input space at no gas cost and with no reliance on any caller.
+
+The on-chain accounting assert reduced to deposit == deposit. It cost gas,
+verified nothing, and would not have caught the critical bug it was positioned
+to catch.
+
+All four are fixed, along with six lower-severity findings. The result is 438
+lines of source across three contracts, 83 passing tests, 100% line and function
+coverage, zero compiler and zero linter warnings across src/, script/ and test/,
+and no dead code: every custom
+error is reachable, every event is emitted, every import is referenced, every
+entrypoint is exercised. Four branches in the tree are unreachable on purpose,
+two in src/ and two in the deploy script. All four are defensive guards that
+convert a silent wrong result into a halt, and all four are called out by file
+and line in PART 5 so the decision to keep them stays the reader's to make.
+
+The remaining risk is concentrated in three places, none of them in the accrual
+math: the EVM version assumed for BOT Chain, the RPC log-range limits that "My
+streams" depends on, and the wallet-browser rendering issue, which is understood
+and has a specific remedy in PART 10.
+
+Deployment is now scripted rather than manual, and the script is where the
+irreversibility of these contracts is taken seriously: no owner, no pause and no
+sweep means the deploy transaction is the last moment anything can be corrected,
+so every check that can run before the broadcast runs before it, and the
+immutables are read back off the chain afterwards. The guard most likely to
+matter refuses to deploy the placeholder recipient list, which would otherwise
+produce a funded contract that nobody can claim from and nobody can unwind.
+
+PaymentStream is live and verified on testnet 968, and the live lifecycle
+confirmed on chain what the suite asserted: cancellation conserved value to the
+wei, the contract settled to exactly zero, and C-1 stayed fixed past the point
+where the blueprint's version would have re-exposed the sender's refund. Two of
+the three risks this document ended on were open only because nobody had asked
+the chain, and asking cost nothing: the getLogs limit that would have forced an
+indexer does not exist for address-filtered queries, and testnet's EVM level is
+Cancun. Mainnet's is still unknown, which is why paris remains the target.
+
+Live testing also produced the one finding this implementation introduced rather
+than inherited. C-10 is small and cost nobody anything, but it is worth reading
+as a pattern: cancel() leaves `end` in the future on purpose because moving it
+caused C-1, and vestedOf had not been taught that consequence. A deliberate fix
+in one place left a stale assumption in another, and no test caught it because
+every test asked whether the money was right, which it was. Looking at real
+output on a real chain is what surfaced it.
+
+Blueprint build-order steps 1 through 7 are now complete for PaymentStream. Step
+5's contract is written and tested but cannot be deployed until a real recipient
+list exists, which is a business input rather than remaining work.
+

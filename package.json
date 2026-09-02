@@ -1,0 +1,20 @@
+{
+  "name": "commit",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "scripts": {
+    "test": "forge test",
+    "test:web": "npm --prefix web run typecheck && npm --prefix web run build",
+    "test:tree": "node tooling/build-tree.mjs tooling/recipients.csv tooling/out"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "dependencies": {
+    "@openzeppelin/merkle-tree": "^1.0.8"
+  }
+}

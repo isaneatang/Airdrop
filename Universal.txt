@@ -1,0 +1,29 @@
+Universal Prompt
+
+while on this project, consider the following things:
+
+On wallet browsers, deop down menu or selection menu fail to render well for some reaason,unlike on the normal android browsers, and web browsers. I think its a wallet browser issue so devise solutions for that.
+
+When designing/styling this UI, strictly avoid these overused "AI-generated" visual and copy patterns:
+
+- No sparkle icons (✨) or sparkle-themed decorative elements
+- No purple-and-black or neon color schemes — use the project's existing muted charcoal / desaturated green theme only
+- No Lucide icon set — use a different icon library or custom icons
+- No "liquid glass" / glassmorphism effects
+- No harsh or default-looking gradients
+- No pure white backgrounds
+- No rainbow or unthemed pastel color accents
+- No radial orbs, dot grids, or generic decorative background shapes with no functional purpose
+- No colored left-border stripes on cards (default shadcn/Tailwind pattern)
+- No bento grid layout unless it serves an actual content hierarchy need
+- No fake testimonials or placeholder social proof — omit the section entirely if real content isn't available
+- No em dashes in UI copy or headings
+- No "it's not X, it's Y" copy formatting
+
+Keep default good practices (checkmark bullets, pricing tiers, hover states, standard fonts like Inter) — only avoid the items explicitly listed above.
+
+
+
+But the Ui most be clean and fluid. easy to read and interact with. 
+
+On mobile view, if there are multiple navigation option, try to utilisee a bottom navigation bar, or else just make sure that they can navigate well.
