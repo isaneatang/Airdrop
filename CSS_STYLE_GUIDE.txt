@@ -1,0 +1,181 @@
+VESTED DISTRIBUTION CSS STYLE GUIDE
+===================================
+
+Visual direction
+----------------
+Use a black foundation with deep green surfaces and bright emerald accents.
+Keep text high contrast. Use borders to create structure instead of gray cards.
+Avoid pure white page backgrounds, purple/neon palettes, glass effects, and
+decorative shapes that do not support the content.
+
+Core palette
+------------
+Page black-green:       #06110B
+Deep black:             #020805
+Card green-black:       #0A1B12
+Raised green-black:     #10291A
+Border green:           #17452B
+Bright border green:    #21683B
+Primary emerald:        #35D875
+Strong emerald:         #0CA650
+Soft emerald:           #69F19A
+Pale mint:              #A0FFC0
+Body text:              #D0F1D5
+Strong text:            #F1FFF3
+Muted text:             #7AB18A
+Destructive clay:       #BD8F7F
+
+Suggested CSS variables
+-----------------------
+:root {
+  --page: #06110B;
+  --black: #020805;
+  --surface: #0A1B12;
+  --surface-raised: #10291A;
+  --border: #17452B;
+  --border-bright: #21683B;
+  --accent: #35D875;
+  --accent-strong: #0CA650;
+  --accent-soft: #69F19A;
+  --text: #D0F1D5;
+  --text-strong: #F1FFF3;
+  --text-muted: #7AB18A;
+}
+
+Typography
+----------
+Font stack:
+  Inter, system-ui, -apple-system, "Segoe UI", sans-serif
+
+Use tight tracking for large display headings:
+  font-size: clamp(2.25rem, 7vw, 3.75rem);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  font-weight: 600;
+
+Use uppercase labels sparingly:
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+
+Use tabular numerals for balances, percentages, and counters:
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+
+Surfaces and colorful borders
+-----------------------------
+.card {
+  border: 1px solid rgba(33, 104, 59, 0.8);
+  border-radius: 1rem;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 20, 8, 0.16);
+}
+
+.card-highlight {
+  border-color: rgba(53, 216, 117, 0.8);
+  background: #10341D;
+}
+
+.card:hover {
+  border-color: var(--accent);
+}
+
+Buttons
+-------
+.button-primary {
+  border: 1px solid var(--accent);
+  border-radius: 0.75rem;
+  background: var(--accent);
+  color: var(--black);
+  font-weight: 600;
+  padding: 0.75rem 1rem;
+}
+
+.button-primary:hover {
+  background: var(--accent-soft);
+}
+
+.button-secondary {
+  border: 1px solid rgba(105, 241, 154, 0.7);
+  border-radius: 0.75rem;
+  color: var(--text-strong);
+  padding: 0.75rem 1rem;
+}
+
+.button-secondary:hover {
+  border-color: var(--accent-soft);
+  background: rgba(8, 122, 61, 0.2);
+}
+
+Hero sections
+-------------
+Use a dark green panel with a bright border. Decorative artwork must never
+cover buttons or text, especially on Android wallet browsers.
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 370px;
+  border: 1px solid rgba(33, 104, 59, 0.7);
+  border-radius: 1.75rem;
+  background: #0D2818;
+  padding: 2.5rem;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 20;
+}
+
+.hero-art {
+  pointer-events: none;
+  position: absolute;
+  z-index: 0;
+}
+
+@media (max-width: 639px) {
+  .hero {
+    min-height: 430px;
+    padding: 1.75rem;
+  }
+
+  .hero-art {
+    right: -14rem;
+    bottom: -13rem;
+    opacity: 0.34;
+  }
+
+  .hero a,
+  .hero button {
+    position: relative;
+    z-index: 30;
+  }
+}
+
+Navigation
+----------
+Desktop navigation uses a black-green top rail. Mobile navigation is fixed to
+the bottom with safe-area padding for wallet browsers.
+
+.mobile-nav {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  border-top: 1px solid var(--border);
+  background: rgba(6, 17, 11, 0.98);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+}
+
+Accessibility and mobile rules
+------------------------------
+Always preserve visible focus rings:
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+
+Avoid native select controls in wallet in-app browsers. Use button-based sheets
+or full-width mobile panels. Portal overlays to document.body. Use 100dvh with
+a 100vh fallback and include env(safe-area-inset-bottom).

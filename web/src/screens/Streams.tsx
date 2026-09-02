@@ -57,7 +57,7 @@ export function StreamsScreen() {
           <p className="mt-4 max-w-lg text-sm leading-6 text-ink-300 sm:text-base">
             Create token streams, track what is unlocking, and claim distributions on BOT Chain without a custodian in the middle.
           </p>
-          <div className="mt-6 flex flex-wrap gap-3">
+          <div className="hero-actions mt-6 flex flex-wrap gap-3">
             <a href="#/create" className="hero-action">Create a stream <Icon name="arrow" className="h-4 w-4" /></a>
             <a href="#/airdrop" className="hero-link">Explore airdrops <Icon name="arrow" className="h-4 w-4" /></a>
           </div>

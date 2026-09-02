@@ -103,7 +103,8 @@
     @apply inline-flex items-center gap-2 rounded-xl bg-moss-500 px-4 py-3 text-sm font-semibold text-ink-950 transition-transform hover:-translate-y-0.5 hover:bg-moss-400;
   }
   .hero-link { @apply inline-flex items-center gap-2 rounded-xl border border-moss-400/70 px-4 py-3 text-sm font-medium text-ink-100 hover:border-moss-300 hover:bg-moss-700/20; }
-  .hero-signal { @apply absolute -right-12 bottom-[-5rem] h-[25rem] w-[25rem] sm:right-10 sm:bottom-[-6rem]; }
+  .hero-signal { @apply pointer-events-none absolute -right-12 bottom-[-5rem] z-0 h-[25rem] w-[25rem] sm:right-10 sm:bottom-[-6rem]; }
+  .hero-actions { @apply relative z-20; }
   .signal-ring { @apply absolute rounded-full border border-moss-300/20; }
   .signal-ring-one { @apply inset-0; }
   .signal-ring-two { @apply inset-12 border-moss-300/30; }
@@ -117,4 +118,12 @@
   .metric-label { @apply block text-xs text-moss-300; }
   .metric-card strong { @apply mt-3 block truncate text-2xl font-semibold tracking-tight text-ink-50; }
   .metric-foot { @apply mt-1 block text-[11px] text-ink-500; }
+
+  /* Keep the decorative signal away from hero actions in narrow Android and
+     wallet-browser viewports. The controls remain fully opaque and tappable. */
+  @media (max-width: 639px) {
+    .dashboard-hero { min-height: 430px; }
+    .hero-signal { right: -14rem; bottom: -13rem; opacity: 0.34; }
+    .hero-link, .hero-action { position: relative; z-index: 30; }
+  }
 }
