@@ -8,26 +8,26 @@ export default {
         // rather than fighting it. Hierarchy is carried by these luminance steps,
         // because the palette deliberately has almost no hue variety to spend.
         ink: {
-          950: "#101312",
-          900: "#161a18", // page ground
-          850: "#1b201e", // card surface
-          800: "#222826", // raised / hover
-          700: "#2c3330", // strong hairline
-          600: "#3a423e", // hairline border
-          500: "#586360", // disabled text
-          400: "#7b8783", // tertiary text
-          300: "#9daaa4", // secondary text
-          200: "#c4cfc9", // body text
-          100: "#dfe6e1", // emphasis
-          50: "#eef2ef", // lightest surface, never pure white
+          950: "#020805",
+          900: "#06110b", // black-green page ground
+          850: "#0a1b12", // green-black card surface
+          800: "#10291a", // raised / hover
+          700: "#17452b", // green hairline
+          600: "#21683b", // bright green border
+          500: "#4e8a61", // disabled text
+          400: "#7ab18a", // tertiary text
+          300: "#a8d6b2", // secondary text
+          200: "#d0f1d5", // body text
+          100: "#e1f9e4", // emphasis
+          50: "#f1fff3", // lightest surface
         },
         // The single accent. Desaturated green, three steps only.
         moss: {
-          700: "#3f5a49",
-          600: "#4e6d59",
-          500: "#6f9179", // primary accent
-          400: "#8aa993",
-          300: "#a8c0af",
+          700: "#087a3d",
+          600: "#0ca650",
+          500: "#35d875", // primary accent
+          400: "#69f19a",
+          300: "#a0ffc0",
         },
         // Destructive actions need to read as distinct without introducing a second
         // decorative hue. Muted clay, same low saturation as the accent.

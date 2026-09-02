@@ -33,7 +33,7 @@
     @apply bg-ink-900 text-ink-200 font-sans antialiased;
     /* Wallet WebViews overscroll into a white gutter that ignores the body
        background. Painting the root the same value hides the seam. */
-    background-color: #161a18;
+     background-color: #06110b;
     margin: 0;
     min-height: var(--app-height);
     overscroll-behavior-y: none;
@@ -56,7 +56,7 @@
     @apply outline-none ring-2 ring-moss-500/70 ring-offset-2 ring-offset-ink-900;
   }
 
-  ::selection { background: #4e6d59; color: #eef2ef; }
+   ::selection { background: #0ca650; color: #f1fff3; }
 }
 
 @layer utilities {
@@ -90,7 +90,7 @@
   }
 
   .dashboard-hero {
-    @apply relative min-h-[370px] overflow-hidden rounded-[1.75rem] border border-moss-700/50 bg-[#202c27] p-7 shadow-[0_24px_80px_rgba(10,15,13,0.28)] sm:p-10;
+    @apply relative min-h-[370px] overflow-hidden rounded-[1.75rem] border border-moss-600/70 bg-[#0d2818] p-7 shadow-[0_24px_80px_rgba(0,20,8,0.45)] sm:p-10;
   }
   .dashboard-hero::after {
     content: "";
@@ -102,7 +102,7 @@
   .hero-action {
     @apply inline-flex items-center gap-2 rounded-xl bg-moss-500 px-4 py-3 text-sm font-semibold text-ink-950 transition-transform hover:-translate-y-0.5 hover:bg-moss-400;
   }
-  .hero-link { @apply inline-flex items-center gap-2 rounded-xl border border-ink-500/70 px-4 py-3 text-sm font-medium text-ink-100 hover:border-ink-300; }
+  .hero-link { @apply inline-flex items-center gap-2 rounded-xl border border-moss-400/70 px-4 py-3 text-sm font-medium text-ink-100 hover:border-moss-300 hover:bg-moss-700/20; }
   .hero-signal { @apply absolute -right-12 bottom-[-5rem] h-[25rem] w-[25rem] sm:right-10 sm:bottom-[-6rem]; }
   .signal-ring { @apply absolute rounded-full border border-moss-300/20; }
   .signal-ring-one { @apply inset-0; }
@@ -112,9 +112,9 @@
   .signal-line-one { transform: rotate(28deg); } .signal-line-two { transform: rotate(-52deg); }
 
   .metric-grid { @apply grid gap-3 sm:grid-cols-3; }
-  .metric-card { @apply rounded-2xl border border-ink-700 bg-ink-850 px-5 py-4; }
-  .metric-highlight { @apply border-moss-700/60 bg-[#202b26]; }
-  .metric-label { @apply block text-xs text-ink-400; }
+  .metric-card { @apply rounded-2xl border border-ink-600/80 bg-ink-850 px-5 py-4 shadow-[0_8px_24px_rgba(0,20,8,0.22)]; }
+  .metric-highlight { @apply border-moss-500/80 bg-[#10341d]; }
+  .metric-label { @apply block text-xs text-moss-300; }
   .metric-card strong { @apply mt-3 block truncate text-2xl font-semibold tracking-tight text-ink-50; }
   .metric-foot { @apply mt-1 block text-[11px] text-ink-500; }
 }

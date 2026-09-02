@@ -12,7 +12,7 @@ export function Card({
   // stripe, no glass, no gradient: Universal.txt rules out all three, and the
   // luminance step is doing the work anyway.
   return (
-    <div className={`rounded-2xl border border-ink-700 bg-ink-850 ${className}`}>{children}</div>
+    <div className={`rounded-2xl border border-moss-700/70 bg-ink-850 shadow-[0_8px_24px_rgba(0,20,8,0.16)] ${className}`}>{children}</div>
   );
 }
 
